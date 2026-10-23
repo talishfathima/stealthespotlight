@@ -72,8 +72,33 @@ test("leaderboard combines judge and audience scores for the winner", () => {
     ]),
   });
 
-  assert.equal(entry.totalScore, 26);
-  assert.equal(entry.validScoreCount, 3);
-  assert.equal(entry.average, 8.67);
-  assert.ok(entry.scores.some((score) => score.judgeName === "Audience"));
+  assert.equal(entry.totalScore, 16);
+  assert.equal(entry.validScoreCount, 2);
+  assert.equal(entry.average, 8.4);
+  assert.ok(entry.scores.some((score) => score.judgeName === "Audience (1)"));
+});
+
+test("audience votes are averaged into a single 20% share", () => {
+  const entry = buildParticipantLeaderboardEntry({
+    participant: {
+      id: 1,
+      number: 1,
+      name: "Ada",
+      performance_title: "Song",
+      photo_url: null,
+      display_order: 1,
+    },
+    judgeRows: [
+      { id: 11, participant_id: 1, judge_id: 21, score: 9, is_missing: false, is_corrected: false, submitted_at: null },
+    ],
+    audienceRows: [
+      { id: 101, participant_id: 1, score: 4, created_at: null },
+      { id: 102, participant_id: 1, score: 8, created_at: null },
+    ],
+    judgeNames: new Map([[21, "Judge Ada"]]),
+  });
+
+  assert.equal(entry.average, 8.4);
+  assert.equal(entry.scores.filter((score) => score.judgeId === -1).length, 1);
+  assert.equal(entry.scores.find((score) => score.judgeId === -1)?.score, 6);
 });

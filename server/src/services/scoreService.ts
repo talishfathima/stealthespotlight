@@ -24,9 +24,6 @@ export async function submitScore(input: {
   if (!session.active_participant_id || session.active_participant_id !== participantId) {
     throw new ScoreError("This participant is not currently performing.", 403);
   }
-  if (!session.voting_deadline_at || new Date(session.voting_deadline_at).getTime() <= Date.now()) {
-    throw new ScoreError("The voting deadline has passed.", 403);
-  }
   if (!Number.isInteger(score) || score < session.scoring_min || score > session.scoring_max) {
     throw new ScoreError(
       `Score must be a whole number between ${session.scoring_min} and ${session.scoring_max}.`,
@@ -35,7 +32,7 @@ export async function submitScore(input: {
   }
 
   const result = await withTransaction(async (client) => {
-    // Re-check deadline inside the transaction so a race cannot sneak past.
+    // Re-check state inside the transaction so a close cannot be raced.
     const sessionResult = await client.query("SELECT * FROM event_sessions WHERE id = 1 FOR UPDATE");
     const freshSession = sessionResult.rows[0];
     if (freshSession.status !== "voting_open") {
@@ -43,12 +40,6 @@ export async function submitScore(input: {
     }
     if (freshSession.active_participant_id !== participantId) {
       throw new ScoreError("This participant is not currently performing.", 403);
-    }
-    if (
-      !freshSession.voting_deadline_at ||
-      new Date(freshSession.voting_deadline_at).getTime() <= Date.now()
-    ) {
-      throw new ScoreError("The voting deadline has passed.", 403);
     }
 
     const existing = await client.query(

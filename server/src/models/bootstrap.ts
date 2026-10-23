@@ -10,9 +10,18 @@ export async function ensureDefaultUsers(): Promise<void> {
 
   await pool.query(
     `INSERT INTO users (username, password_hash, display_name, role)
-     VALUES ('admin', $1, 'Spotlight Admin', 'admin'),
-            ('judge', $2, 'Head Judge', 'judge')
+     VALUES ('admin', $1, 'Spotlight Admin', 'admin')
      ON CONFLICT (username) DO NOTHING`,
-    [adminHash, judgeHash]
+    [adminHash]
+  );
+
+  // Only seed a default judge on a fresh database. Once judges exist (for
+  // example, a full roster added by the crew), never recreate old defaults.
+  await pool.query(
+    `INSERT INTO users (username, password_hash, display_name, role)
+     SELECT 'judge01', $1, 'Judge 01', 'judge'
+     WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'judge')
+     ON CONFLICT (username) DO NOTHING`,
+    [judgeHash]
   );
 }

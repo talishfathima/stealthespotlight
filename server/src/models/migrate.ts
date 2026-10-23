@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS event_sessions (
 
 CREATE TABLE IF NOT EXISTS audience_votes (
   id                 SERIAL PRIMARY KEY,
-  token              TEXT NOT NULL UNIQUE,
+  token              TEXT NOT NULL,
   participant_id     INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
   score              INTEGER NOT NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -104,6 +104,14 @@ export async function runMigrations(): Promise<void> {
       ADD COLUMN IF NOT EXISTS audience_vote_token TEXT,
       ADD COLUMN IF NOT EXISTS audience_vote_participant_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
       ADD COLUMN IF NOT EXISTS audience_vote_generated_at TIMESTAMPTZ;
+  `);
+
+  // Anonymous audience ballots: one vote per device per performer, instead of
+  // a single shared token per round.
+  await pool.query(`
+    ALTER TABLE audience_votes DROP CONSTRAINT IF EXISTS audience_votes_token_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS audience_votes_participant_voter_idx
+      ON audience_votes (participant_id, token);
   `);
 
   const existing = await pool.query("SELECT id FROM event_sessions LIMIT 1");

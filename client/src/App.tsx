@@ -7,7 +7,8 @@ import JudgePage from "./pages/JudgePage";
 import AudiencePage from "./pages/AudiencePage";
 import ResultsPage from "./pages/ResultsPage";
 import AudienceVotePage from "./pages/AudienceVotePage";
-import { api, extractError } from "./utils/api";
+import { api, extractError, setAuthToken } from "./utils/api";
+import { refreshSocketAuth } from "./hooks/useRealtime";
 import type { User } from "./types";
 
 export default function App() {
@@ -17,7 +18,10 @@ export default function App() {
   useEffect(() => {
     api
       .get("/auth/me")
-      .then((res) => setUser(res.data.user))
+      .then((res) => {
+        if (res.data.authToken) setAuthToken(res.data.authToken);
+        setUser(res.data.user);
+      })
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
   }, []);
@@ -67,9 +71,12 @@ function JudgeLogin({ onLogin }: { onLogin: (u: User) => void }) {
       const res = await api.post("/auth/login", { username, password });
       if (res.data.user?.role !== "judge") {
         setError("This account is not a judge account.");
+        setAuthToken(null);
         await api.post("/auth/logout");
         return;
       }
+      setAuthToken(res.data.authToken);
+      refreshSocketAuth();
       onLogin(res.data.user);
     } catch (err) {
       setError(extractError(err));

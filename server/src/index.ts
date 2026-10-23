@@ -6,9 +6,11 @@ import cors from "cors";
 import { Server as SocketServer, type Socket } from "socket.io";
 import { config } from "./config/env.js";
 import { isMemoryDatabaseActive, pool } from "./config/database.js";
+import { verifyAuthToken } from "./middleware/auth.js";
+import type { User } from "./config/types.js";
 import { runMigrations } from "./models/migrate.js";
 import { api } from "./routes/api.js";
-import { broadcastState, onStateChange, resumeTimers, getPublicState, getAdminState } from "./services/stateService.js";
+import { broadcastState, onStateChange, getPublicState, getAdminState } from "./services/stateService.js";
 import { getMySubmission } from "./services/scoreService.js";
 
 const PgStore = connectPgSimple(session);
@@ -84,16 +86,27 @@ async function main() {
   // Share express-session with socket.io so we know who is connecting.
   io.engine.use(sessionMiddleware);
 
+  function socketUser(socket: Socket): User | null {
+    const handshake = socket.handshake.auth as { authToken?: unknown } | undefined;
+    const tokenUser = verifyAuthToken(
+      typeof handshake?.authToken === "string" ? handshake.authToken : null
+    );
+    if (tokenUser) return tokenUser;
+
+    const sessionUser = (socket.request as unknown as { session?: { user?: User } })?.session?.user;
+    return sessionUser ?? null;
+  }
+
   function socketRole(socket: Socket): "admin" | "judge" | "public" {
-    const user = (socket.request as unknown as { session?: { user?: { role?: string } } })?.session?.user;
+    const user = socketUser(socket);
     if (user?.role === "admin") return "admin";
     if (user?.role === "judge") return "judge";
     return "public";
   }
 
   function socketJudgeId(socket: Socket): number | null {
-    const user = (socket.request as unknown as { session?: { user?: { id?: number } } })?.session?.user;
-    return typeof user?.id === "number" ? user.id : null;
+    const user = socketUser(socket);
+    return user?.role === "judge" ? user.id : null;
   }
 
   async function pushStateTo(socket: Socket) {
@@ -146,7 +159,6 @@ async function main() {
 
   server.listen(config.port, () => {
     console.log(`[server] Authorcraft Steal the Spotlight API on http://localhost:${config.port}`);
-    resumeTimers();
     void broadcastState();
   });
 }

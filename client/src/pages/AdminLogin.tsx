@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, extractError } from "../utils/api";
+import { api, extractError, setAuthToken } from "../utils/api";
 import { Sparkle, TicketStub } from "../components/Decor";
 import type { User } from "../types";
 
@@ -19,9 +19,11 @@ export default function AdminLogin({ onLogin }: { onLogin: (u: User) => void }) 
       const res = await api.post("/auth/login", { username, password });
       if (res.data.user?.role !== "admin") {
         setError("That account does not have admin access.");
+        setAuthToken(null);
         await api.post("/auth/logout");
         return;
       }
+      setAuthToken(res.data.authToken);
       onLogin(res.data.user);
       navigate("/admin");
     } catch (err) {
@@ -80,7 +82,7 @@ export default function AdminLogin({ onLogin }: { onLogin: (u: User) => void }) 
         </TicketStub>
 
         <p className="text-center mt-6 text-xs text-parchment/40">
-          Audience and judges do not need this login.
+          Judges sign in separately at <span className="text-antique-gold">/judge</span>.
         </p>
       </div>
     </div>

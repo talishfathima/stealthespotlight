@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, type Socket } from "socket.io-client";
+import { getAuthToken } from "../utils/api";
 
 let sharedSocket: Socket | null = null;
+
+function authPayload() {
+  const token = getAuthToken();
+  return token ? { authToken: token } : {};
+}
 
 function getSocket(): Socket {
   if (!sharedSocket) {
     sharedSocket = io("/", {
       withCredentials: true,
+      auth: authPayload(),
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionDelay: 500,
@@ -14,6 +21,13 @@ function getSocket(): Socket {
     });
   }
   return sharedSocket;
+}
+
+/** Reconnect the live socket after a login/logout so it picks up the new identity. */
+export function refreshSocketAuth() {
+  if (!sharedSocket) return;
+  sharedSocket.auth = authPayload();
+  sharedSocket.disconnect().connect();
 }
 
 export function useSocketState<T>(fallback: T | null = null) {
@@ -53,9 +67,9 @@ export function useSocketState<T>(fallback: T | null = null) {
 }
 
 /**
- * Authoritative countdown driven by the server deadline.
- * We measure the offset between the server clock and local clock once,
- * then compute remaining time from the server deadline so all devices agree.
+ * Authoritative clock: measure the offset between the server clock and the
+ * local clock once, then derive timestamps from the server clock so all
+ * devices agree.
  */
 export function useServerClock() {
   const offsetRef = useRef(0);
@@ -91,23 +105,22 @@ export function useServerClock() {
   return { now, subscribe, offset: offsetRef };
 }
 
-export function useCountdown(deadline: string | null): number {
+export function useElapsed(since: string | null): number {
   const { now, subscribe } = useServerClock();
-  const [remaining, setRemaining] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    if (!deadline) {
-      setRemaining(0);
+    if (!since) {
+      setElapsed(0);
       return;
     }
-    const deadlineMs = new Date(deadline).getTime();
-    const tick = () => {
-      const ms = deadlineMs - now();
-      setRemaining(ms > 0 ? Math.ceil(ms / 1000) : 0);
-    };
+    const startMs = new Date(since).getTime();
+    const tick = () => setElapsed(Math.max(0, Math.floor((now() - startMs) / 1000)));
     tick();
     return subscribe(tick);
-  }, [deadline, now, subscribe]);
+  }, [since, now, subscribe]);
 
-  return remaining;
+  return elapsed;
 }
+
+

@@ -7,7 +7,8 @@ A real-time event scoring website for live talent shows. Features admin control,
 - Frontend: React + Vite + TypeScript + Tailwind CSS
 - Backend: Node.js + Express + Socket.IO
 - Database: PostgreSQL
-- Authentication: Express Session with secure cookies
+- Authentication: Express Session with secure cookies plus signed per-tab tokens
+  (admin and judge can stay signed in in separate tabs of the same browser)
 
 ## Features
 
@@ -15,8 +16,8 @@ A real-time event scoring website for live talent shows. Features admin control,
 - Participant management (add, edit, delete, reorder)
 - Judge management (add, remove, reset a judge's password)
 - Select current performer
-- Open voting with 10-second countdown
-- Manual close voting
+- Open voting
+- Close voting manually when the crew is ready (no auto-close timer)
 - View scores, averages, and private leaderboard
 - Publish final results
 - Move to next participant
@@ -24,15 +25,21 @@ A real-time event scoring website for live talent shows. Features admin control,
 ### Judge Interface
 - View current participant
 - Submit score (0-10) while voting is open
-- See countdown and voting status
+- See voting status
 - One score per participant
 
 ### Audience Display
 - Theatrical stage view for projection (16:9)
-- Live countdown during voting
 - Voting status display
+- Shows a plain `/vote` link instead of a QR code
 - Final winners reveal
 - Hidden private data (scores, leaderboard)
+
+### Audience Voting
+- No login needed — each phone/device gets an anonymous ballot
+- One vote per performer per device, reset automatically for every new round
+- Votes are averaged into a single audience score worth 20% of the final result
+  (judges are worth 80%)
 
 ## Quick Start
 
@@ -58,10 +65,19 @@ A real-time event scoring website for live talent shows. Features admin control,
    `
 
 5. Access the interfaces:
-   - Admin: http://localhost:5173/admin/login
-   - Judge: http://localhost:5173/judge
-   - Audience: http://localhost:5173/audience
+  - Admin: http://localhost:5173/admin/login
+  - Judge: http://localhost:5173/judge
+  - Audience display: http://localhost:5173/audience
+  - Audience voting: http://localhost:5173/vote (no login needed)
+
+  Each tab keeps its own login, so you can run the admin and judge views side by
+  side in the same browser. If you were already signed in before this change,
+  sign in once more in the judge tab.
    - Home: http://localhost:5173/
+
+For phones on the same Wi-Fi, set `CLIENT_URL` in `.env` to this computer's LAN
+address (for example `http://192.168.1.20:5173`) so the vote link shown on the
+audience screen is reachable from audience phones.
 
 ## Development
 
@@ -71,7 +87,7 @@ A real-time event scoring website for live talent shows. Features admin control,
 
 ## Adding more judges
 
-The show ships with one judge account (`judge`). To add more:
+The show ships with one judge account (`judge01`). To add more:
 
 1. Sign in at http://localhost:5173/admin/login
 2. Scroll to **Judges' Panel** at the bottom of the dashboard
@@ -103,9 +119,10 @@ npm test
 
 This runs `docs/test-workflow.ps1`, which exercises the API end to end:
 auth, access control, data-leak checks on the public state, the voting
-lifecycle, score validation, auto-close on the deadline, missing-score
-marking, admin corrections, the publish gate, reset, the audit trail,
-participant reordering and multi-judge management.
+lifecycle, score validation, anonymous audience voting and 80/20 weighting,
+manual close, missing-score marking, admin
+corrections, the publish gate, reset, the audit trail, participant
+reordering and multi-judge management.
 
 ### Manual browser check
 
@@ -114,8 +131,9 @@ Run `npm run dev`, then open these in separate windows:
 | Window | URL | What to check |
 | --- | --- | --- |
 | Admin | http://localhost:5173/admin/login | `admin` / `admin-spotlight-2026` |
-| Judge | http://localhost:5173/judge | `judge` / `judge-spotlight-2026` |
-| Audience | http://localhost:5173/audience | no login needed |
+| Judge | http://localhost:5173/judge | `judge01` / `judge-spotlight-2026` |
+| Audience display | http://localhost:5173/audience | no login needed |
+| Audience vote | http://localhost:5173/vote | no login needed |
 
 1. **Add judges** — in the admin window, add two more judges in the Judges'
    Panel and copy the credentials.
@@ -125,16 +143,18 @@ Run `npm run dev`, then open these in separate windows:
 3. **Put someone on stage** — in the admin window, click **Set Active** on a
    participant. The audience window and both judge windows should show the
    name immediately.
-4. **Open voting** — click **Open Voting**. The audience window should start
-   a 10-second countdown, and both judge windows should show the score pad.
-5. **Score from both judges** — submit a score in each judge window. The
-   second submission should be rejected with *"You have already submitted a
-   score for this participant."* once you try to change it.
+4. **Open voting** — click **Open Voting**. The audience window should show
+   the `/vote` link and that voting is open; both judge windows should show
+   the score pad.
+5. **Score from both judges and the audience** — submit a score in each judge
+   window, then open the `/vote` link on a phone and vote. A second vote from
+   the same device in the same round should be rejected, but the same device
+   can vote again when the next performer is on stage.
 6. **Check privacy** — the audience window must never show scores, averages
    or the leaderboard. Only the admin window shows them.
-7. **Auto-close** — wait for the countdown to hit zero. The audience window
-   should show *Voting Closed*, and the admin leaderboard should list any
-   judge who did not score as *missing*.
+7. **Manual close** — click **Close Voting Now** when the round is over. The
+   audience window should show *Voting Closed*, and the admin leaderboard
+   should list any judge who did not score as *missing*.
 8. **Correct a score** — in the admin window, click **Correct** on a judge's
    score, change it, and give a reason. The judge's window updates to show
    the corrected score and a *"Corrected by admin"* note.
@@ -145,6 +165,8 @@ Run `npm run dev`, then open these in separate windows:
 ## Notes
 
 - The leaderboard, individual scores, and averages are only visible to authenticated admins.
-- All voting logic and deadlines are enforced on the server.
+- Final scores are weighted 80% judges / 20% audience. If one side has no votes,
+  the other side is used alone.
+- All voting logic is enforced on the server.
 - Audience display shows no private scoring data until results are published.
 - Change the seeded passwords before a real event: `POST /api/auth/change-password`.

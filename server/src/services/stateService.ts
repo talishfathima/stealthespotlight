@@ -32,24 +32,6 @@ function emit(scope: "public" | "admin", state: PublicState | AdminState) {
   }
 }
 
-/** Auto-close voting once the server-side deadline passes. */
-let closeTimer: NodeJS.Timeout | null = null;
-
-function scheduleAutoClose(deadlineAt: Date) {
-  if (closeTimer) clearTimeout(closeTimer);
-  const delay = deadlineAt.getTime() - Date.now();
-  closeTimer = setTimeout(() => {
-    void closeVoting({ reason: "deadline" }).catch((error) =>
-      console.error("[state] auto-close failed:", error)
-    );
-  }, Math.max(0, delay));
-}
-
-function cancelAutoClose() {
-  if (closeTimer) clearTimeout(closeTimer);
-  closeTimer = null;
-}
-
 export async function getSession(): Promise<EventSession> {
   const row = await pool.query("SELECT * FROM event_sessions WHERE id = 1");
   return row.rows[0] as EventSession;
@@ -79,20 +61,12 @@ export async function getJudges(): Promise<JudgeAccount[]> {
   return result.rows as JudgeAccount[];
 }
 
-/** Closes voting if the deadline has passed. Safe to call at any time. */
+/** Voting now stays open until an admin closes it. */
 export async function reconcileDeadline(): Promise<EventSession> {
-  const session = await getSession();
-  if (session.status === "voting_open" && session.voting_deadline_at) {
-    if (new Date(session.voting_deadline_at).getTime() <= Date.now()) {
-      await closeVoting({ reason: "deadline" });
-      return getSession();
-    }
-    scheduleAutoClose(new Date(session.voting_deadline_at));
-  }
-  return session;
+  return getSession();
 }
 
-export async function startVoting(durationSec?: number): Promise<EventSession> {
+export async function startVoting(): Promise<EventSession> {
   const newSession = await withTransaction(async (client) => {
     const sessionResult = await client.query("SELECT * FROM event_sessions WHERE id = 1 FOR UPDATE");
     const session = sessionResult.rows[0] as EventSession;
@@ -104,9 +78,7 @@ export async function startVoting(durationSec?: number): Promise<EventSession> {
       throw Object.assign(new Error("Select a performer before opening voting."), { status: 400 });
     }
 
-    const duration = durationSec ?? session.voting_duration_sec ?? 30;
     const now = new Date();
-    const deadline = new Date(now.getTime() + duration * 1000);
     const token = generateAudienceRoundToken();
 
     const updated = await client.query(
@@ -116,23 +88,21 @@ export async function startVoting(durationSec?: number): Promise<EventSession> {
            audience_vote_participant_id = $2,
            audience_vote_generated_at = $3,
            voting_opened_at = $4,
-           voting_deadline_at = $5,
-           voting_duration_sec = $6,
+           voting_deadline_at = NULL,
+           voting_duration_sec = 0,
            updated_at = now()
        WHERE id = 1
        RETURNING *`,
-      [token, session.active_participant_id, now.toISOString(), now.toISOString(), deadline.toISOString(), duration]
+      [token, session.active_participant_id, now.toISOString(), now.toISOString()]
     );
 
     await client.query(
       `INSERT INTO event_audit (actor_id, action, details)
        VALUES ($1, 'voting_opened', $2)`,
-      [null, JSON.stringify({ participantId: session.active_participant_id, duration, deadline: deadline.toISOString(), audienceVoteToken: token })]
+      [null, JSON.stringify({ participantId: session.active_participant_id, audienceVoteToken: token })]
     );
 
-    const updatedSession = updated.rows[0] as EventSession;
-    scheduleAutoClose(deadline);
-    return updatedSession;
+    return updated.rows[0] as EventSession;
   });
 
   await broadcastState();
@@ -140,7 +110,7 @@ export async function startVoting(durationSec?: number): Promise<EventSession> {
 }
 
 export async function closeVoting(opts: {
-  reason: "manual" | "deadline" | "participant_switch";
+  reason: "manual" | "participant_switch";
   actorId?: number;
 }): Promise<EventSession> {
   const session = await withTransaction(async (client) => {
@@ -183,7 +153,6 @@ export async function closeVoting(opts: {
     return newSession;
   });
 
-  cancelAutoClose();
   await broadcastState();
   return session;
 }
@@ -219,7 +188,6 @@ export async function setActiveParticipant(
           [closed.active_participant_id]
         );
       }
-      cancelAutoClose();
     }
 
     let status = current.status;
@@ -274,47 +242,54 @@ export function buildParticipantLeaderboardEntry({
   audienceRows: AudienceVoteRow[];
   judgeNames: Map<number, string>;
 }): LeaderboardEntry {
-  const rows = [
-    ...judgeRows.map((row) => ({
-      id: row.id,
-      judgeId: row.judge_id,
-      judgeName: judgeNames.get(row.judge_id) ?? `Judge #${row.judge_id}`,
-      score: row.score,
-      isMissing: row.is_missing,
-      isCorrected: row.is_corrected,
-    })),
-    ...audienceRows.map((row) => ({
-      id: row.id,
-      judgeId: -1,
-      judgeName: "Audience",
-      score: row.score,
-      isMissing: false,
-      isCorrected: false,
-    })),
-  ];
+  const judgeEntries = judgeRows.map((row) => ({
+    id: row.id,
+    judgeId: row.judge_id,
+    judgeName: judgeNames.get(row.judge_id) ?? `Judge #${row.judge_id}`,
+    score: row.score,
+    isMissing: row.is_missing,
+    isCorrected: row.is_corrected,
+  }));
 
-  const valid = rows.filter((r) => !r.isMissing && r.score !== null);
-  const missing = rows.filter((r) => r.isMissing || r.score === null);
-  const totalScore = valid.reduce((sum, r) => sum + (r.score ?? 0), 0);
-  const average = valid.length > 0 ? totalScore / valid.length : null;
+  const validJudges = judgeEntries.filter((r) => !r.isMissing && r.score !== null);
+  const missingJudges = judgeEntries.filter((r) => r.isMissing || r.score === null);
+  const judgeTotal = validJudges.reduce((sum, r) => sum + (r.score ?? 0), 0);
+  const judgeAverage = validJudges.length > 0 ? judgeTotal / validJudges.length : null;
+
+  const audienceTotal = audienceRows.reduce((sum, r) => sum + r.score, 0);
+  const audienceAverage = audienceRows.length > 0 ? audienceTotal / audienceRows.length : null;
+
+  // Final score: 80% judges, 20% audience. If one side has no votes yet, use the
+  // other side alone so a performer is not penalised for missing audience votes.
+  const weighted =
+    judgeAverage !== null && audienceAverage !== null
+      ? judgeAverage * 0.8 + audienceAverage * 0.2
+      : judgeAverage ?? audienceAverage;
+
+  const audienceEntry =
+    audienceAverage !== null
+      ? [
+          {
+            id: -1,
+            judgeId: -1,
+            judgeName: `Audience (${audienceRows.length})`,
+            score: Math.round(audienceAverage * 100) / 100,
+            isMissing: false,
+            isCorrected: false,
+          },
+        ]
+      : [];
 
   return {
     rank: 0,
     tied: false,
     participant,
-    average: average === null ? null : Math.round(average * 100) / 100,
-    totalScore,
-    validScoreCount: valid.length,
-    hasAllScores: rows.length > 0 && missing.length === 0,
-    missingJudgeNames: missing.map((r) => r.judgeName),
-    scores: rows.map((r) => ({
-      id: r.id,
-      judgeId: r.judgeId,
-      judgeName: r.judgeName,
-      score: r.score,
-      isMissing: r.isMissing,
-      isCorrected: r.isCorrected,
-    })),
+    average: weighted === null ? null : Math.round(weighted * 100) / 100,
+    totalScore: judgeTotal,
+    validScoreCount: validJudges.length,
+    hasAllScores: judgeEntries.length > 0 && missingJudges.length === 0,
+    missingJudgeNames: missingJudges.map((r) => r.judgeName),
+    scores: [...judgeEntries, ...audienceEntry],
   };
 }
 
@@ -382,9 +357,7 @@ export async function computeLeaderboard(): Promise<LeaderboardEntry[]> {
 }
 
 function toPublicState(session: EventSession, participant: Participant | null): PublicState {
-  const audienceVoteUrl = session.audience_vote_token
-    ? `${config.clientUrl}/vote?token=${encodeURIComponent(session.audience_vote_token)}`
-    : null;
+  const audienceVoteUrl = session.status === "voting_open" ? `${config.clientUrl}/vote` : null;
 
   return {
     title: session.title,
@@ -399,7 +372,7 @@ function toPublicState(session: EventSession, participant: Participant | null): 
           photo_url: participant.photo_url,
         }
       : null,
-    audienceVoteToken: session.audience_vote_token,
+    audienceVoteToken: null,
     audienceVoteUrl,
     votingDeadlineAt: session.voting_deadline_at,
     votingOpenedAt: session.voting_opened_at,
@@ -491,6 +464,7 @@ export async function getPublishedResults(): Promise<PublishedResults | null> {
 export async function resetAllScores(actorId?: number): Promise<void> {
   await withTransaction(async (client) => {
     await client.query("DELETE FROM scores");
+    await client.query("DELETE FROM audience_votes");
     await client.query(
       `UPDATE event_sessions
        SET status = 'ready', active_participant_id = NULL,
@@ -507,20 +481,5 @@ export async function resetAllScores(actorId?: number): Promise<void> {
       [actorId ?? null]
     );
   });
-  cancelAutoClose();
   await broadcastState();
-}
-
-export function resumeTimers(): void {
-  void getSession()
-    .then((session) => {
-      if (session.status === "voting_open" && session.voting_deadline_at) {
-        const deadline = new Date(session.voting_deadline_at);
-        if (deadline.getTime() <= Date.now()) {
-          return closeVoting({ reason: "deadline" }).then(() => undefined);
-        }
-        scheduleAutoClose(deadline);
-      }
-    })
-    .catch((error) => console.error("[state] resume timers failed:", error));
 }

@@ -1,7 +1,15 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { pool } from "../config/database.js";
-import { findUserByUsername, requireAdmin, requireAuth, requireJudge, verifyPassword } from "../middleware/auth.js";
+import {
+  createAuthToken,
+  findUserByUsername,
+  requireAdmin,
+  requireAuth,
+  requireJudge,
+  resolveUser,
+  verifyPassword,
+} from "../middleware/auth.js";
 import {
   broadcastState,
   getAdminState,
@@ -20,9 +28,13 @@ import {
 } from "../services/stateService.js";
 import { correctScore, getMySubmission, submitScore } from "../services/scoreService.js";
 import { validateAudienceScore } from "../services/audienceVote.js";
-import type { Participant } from "../config/types.js";
+import type { Participant, User } from "../config/types.js";
 
 export const api = Router();
+
+function currentUser(res: any): User {
+  return res.locals.user as User;
+}
 
 function handleError(res: any, error: any) {
   const status = error.status ?? 500;
@@ -42,13 +54,14 @@ api.post("/auth/login", async (req, res) => {
     if (!user || !(await verifyPassword(password, user.password_hash))) {
       return res.status(401).json({ error: "Invalid credentials." });
     }
-    req.session.user = {
+    const sessionUser: User = {
       id: user.id,
       username: user.username,
       display_name: user.display_name,
       role: user.role,
     };
-    res.json({ user: req.session.user });
+    req.session.user = sessionUser;
+    res.json({ user: sessionUser, authToken: createAuthToken(sessionUser) });
   } catch (error) {
     handleError(res, error);
   }
@@ -59,7 +72,8 @@ api.post("/auth/logout", (req, res) => {
 });
 
 api.get("/auth/me", (req, res) => {
-  res.json({ user: req.session.user ?? null });
+  const user = resolveUser(req);
+  res.json({ user, authToken: user ? createAuthToken(user) : null });
 });
 
 api.post("/auth/change-password", requireAuth, async (req, res) => {
@@ -68,7 +82,7 @@ api.post("/auth/change-password", requireAuth, async (req, res) => {
     if (typeof newPassword !== "string" || newPassword.length < 8) {
       return res.status(422).json({ error: "New password must be at least 8 characters." });
     }
-    const user = await findUserByUsername(req.session.user!.username);
+    const user = await findUserByUsername(currentUser(res).username);
     if (!user || !(await verifyPassword(currentPassword ?? "", user.password_hash))) {
       return res.status(401).json({ error: "Current password is incorrect." });
     }
@@ -94,7 +108,7 @@ api.get("/state/judge", requireJudge, async (req, res) => {
   try {
     const publicState = await getPublicState();
     const mySubmission = await getMySubmission(
-      req.session.user!.id,
+      currentUser(res).id,
       publicState.activeParticipant?.id ?? null
     );
     res.json({ ...publicState, mySubmission });
@@ -123,17 +137,14 @@ api.get("/results", async (_req, res) => {
 
 api.post("/audience/vote", async (req, res) => {
   try {
-    const { token, score } = req.body ?? {};
-    if (typeof token !== "string" || !token.trim()) {
-      return res.status(422).json({ error: "A valid audience ballot token is required." });
+    const { voterId, score } = req.body ?? {};
+    if (typeof voterId !== "string" || voterId.trim().length < 8 || voterId.trim().length > 100) {
+      return res.status(422).json({ error: "A valid anonymous ballot id is required." });
     }
 
     const session = await getSession();
     if (session.status !== "voting_open") {
       return res.status(409).json({ error: "Audience voting is not open right now." });
-    }
-    if (!session.audience_vote_token || session.audience_vote_token !== token.trim()) {
-      return res.status(409).json({ error: "This audience ballot is no longer active." });
     }
 
     const numericScore = Number(score);
@@ -146,18 +157,16 @@ api.post("/audience/vote", async (req, res) => {
       return res.status(400).json({ error: "There is no active performer for this round." });
     }
 
-    const existing = await pool.query(
-      "SELECT id FROM audience_votes WHERE token = $1",
-      [token.trim()]
+    const inserted = await pool.query(
+      `INSERT INTO audience_votes (token, participant_id, score)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (participant_id, token) DO NOTHING
+       RETURNING id`,
+      [voterId.trim(), participantId, numericScore]
     );
-    if (existing.rowCount && existing.rowCount > 0) {
-      return res.status(409).json({ error: "This round has already received an audience vote." });
+    if (!inserted.rowCount) {
+      return res.status(409).json({ error: "You already voted for this performer." });
     }
-
-    await pool.query(
-      "INSERT INTO audience_votes (token, participant_id, score) VALUES ($1, $2, $3)",
-      [token.trim(), participantId, numericScore]
-    );
 
     res.json({ ok: true, participantId, score: numericScore });
   } catch (error) {
@@ -193,7 +202,7 @@ api.post("/participants", requireAdmin, async (req, res) => {
     );
     await pool.query(
       `INSERT INTO event_audit (actor_id, action, details) VALUES ($1, 'participant_created', $2)`,
-      [req.session.user!.id, JSON.stringify({ id: result.rows[0].id })]
+      [currentUser(res).id, JSON.stringify({ id: result.rows[0].id })]
     );
     await broadcastState();
     res.status(201).json(result.rows[0]);
@@ -246,7 +255,7 @@ api.put("/participants/:id", requireAdmin, async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: "Participant not found." });
     await pool.query(
       `INSERT INTO event_audit (actor_id, action, details) VALUES ($1, 'participant_updated', $2)`,
-      [req.session.user!.id, JSON.stringify({ id })]
+      [currentUser(res).id, JSON.stringify({ id })]
     );
     await broadcastState();
     res.json(result.rows[0]);
@@ -265,7 +274,7 @@ api.delete("/participants/:id", requireAdmin, async (req, res) => {
     if (!result.rows[0]) return res.status(404).json({ error: "Participant not found." });
     await pool.query(
       `INSERT INTO event_audit (actor_id, action, details) VALUES ($1, 'participant_deleted', $2)`,
-      [req.session.user!.id, JSON.stringify({ id })]
+      [currentUser(res).id, JSON.stringify({ id })]
     );
     await broadcastState();
     res.json({ ok: true });
@@ -281,7 +290,7 @@ api.post("/event/select-participant", requireAdmin, async (req, res) => {
     const { participantId } = req.body ?? {};
     const session = await setActiveParticipant(
       participantId === null || participantId === undefined ? null : Number(participantId),
-      req.session.user!.id
+      currentUser(res).id
     );
     res.json(session);
   } catch (error) {
@@ -289,12 +298,9 @@ api.post("/event/select-participant", requireAdmin, async (req, res) => {
   }
 });
 
-api.post("/event/open-voting", requireAdmin, async (req, res) => {
+api.post("/event/open-voting", requireAdmin, async (_req, res) => {
   try {
-    const { durationSec } = req.body ?? {};
-    const session = await startVoting(
-      typeof durationSec === "number" && durationSec > 0 ? Math.floor(durationSec) : undefined
-    );
+    const session = await startVoting();
     res.json(session);
   } catch (error) {
     handleError(res, error);
@@ -303,7 +309,7 @@ api.post("/event/open-voting", requireAdmin, async (req, res) => {
 
 api.post("/event/close-voting", requireAdmin, async (req, res) => {
   try {
-    const session = await closeVoting({ reason: "manual", actorId: req.session.user!.id });
+    const session = await closeVoting({ reason: "manual", actorId: currentUser(res).id });
     res.json(session);
   } catch (error) {
     handleError(res, error);
@@ -312,7 +318,7 @@ api.post("/event/close-voting", requireAdmin, async (req, res) => {
 
 api.post("/event/publish-results", requireAdmin, async (req, res) => {
   try {
-    await publishResults(req.session.user!.id);
+    await publishResults(currentUser(res).id);
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error);
@@ -321,7 +327,7 @@ api.post("/event/publish-results", requireAdmin, async (req, res) => {
 
 api.post("/event/unpublish-results", requireAdmin, async (req, res) => {
   try {
-    await unpublishResults(req.session.user!.id);
+    await unpublishResults(currentUser(res).id);
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error);
@@ -330,7 +336,7 @@ api.post("/event/unpublish-results", requireAdmin, async (req, res) => {
 
 api.post("/event/reset", requireAdmin, async (req, res) => {
   try {
-    await resetAllScores(req.session.user!.id);
+    await resetAllScores(currentUser(res).id);
     res.json({ ok: true });
   } catch (error) {
     handleError(res, error);
@@ -350,7 +356,7 @@ api.post("/scores", requireJudge, async (req, res) => {
     }
     const row = await submitScore({
       participantId,
-      judgeId: req.session.user!.id,
+      judgeId: currentUser(res).id,
       score,
     });
     res.status(201).json({ id: row.id, score: row.score });
@@ -370,7 +376,7 @@ api.post("/scores/:id/correct", requireAdmin, async (req, res) => {
     const row = await correctScore({
       scoreId: Number(req.params.id),
       newScore,
-      actorId: req.session.user!.id,
+      actorId: currentUser(res).id,
       reason: typeof reason === "string" ? reason : "",
     });
     res.json(row);
@@ -457,7 +463,7 @@ api.post("/judges", requireAdmin, async (req, res) => {
     await pool.query(
       `INSERT INTO event_audit (actor_id, action, details)
        VALUES ($1, 'judge_created', $2)`,
-      [req.session.user!.id, JSON.stringify({ judgeId: result.rows[0].id, username: normalized })]
+      [currentUser(res).id, JSON.stringify({ judgeId: result.rows[0].id, username: normalized })]
     );
     await broadcastState();
     res.status(201).json(result.rows[0]);
@@ -489,7 +495,7 @@ api.post("/judges/:id/reset-password", requireAdmin, async (req, res) => {
     await pool.query(
       `INSERT INTO event_audit (actor_id, action, details)
        VALUES ($1, 'judge_password_reset', $2)`,
-      [req.session.user!.id, JSON.stringify({ judgeId: id })]
+      [currentUser(res).id, JSON.stringify({ judgeId: id })]
     );
     res.json({ ok: true });
   } catch (error) {
@@ -525,7 +531,7 @@ api.delete("/judges/:id", requireAdmin, async (req, res) => {
     await pool.query(
       `INSERT INTO event_audit (actor_id, action, details)
        VALUES ($1, 'judge_deleted', $2)`,
-      [req.session.user!.id, JSON.stringify({ judgeId: id })]
+      [currentUser(res).id, JSON.stringify({ judgeId: id })]
     );
     await broadcastState();
     res.json({ ok: true });

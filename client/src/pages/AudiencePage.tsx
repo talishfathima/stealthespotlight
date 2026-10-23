@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useSocketState, useCountdown } from "../hooks/useRealtime";
+import { useSocketState } from "../hooks/useRealtime";
 import { CurtainFrame, ScatterStars, Sparkle } from "../components/Decor";
 import { StatusPill } from "../components/StatusPill";
 import type { PublicState } from "../types";
 
 export default function AudiencePage() {
   const { state, connected } = useSocketState<PublicState>();
-  const deadline = state?.status === "voting_open" ? state.votingDeadlineAt : null;
-  const remaining = useCountdown(deadline);
 
   const participantId = state?.activeParticipant?.id ?? null;
   const prevParticipantId = useRef<number | null>(null);
@@ -35,8 +33,10 @@ export default function AudiencePage() {
     return "The stage is waiting.";
   }, [state]);
 
-  const countdownDisplay = state?.status === "voting_open" ? String(Math.max(0, remaining)) : null;
-  const qrImageUrl = state?.audienceVoteUrl ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(state.audienceVoteUrl)}` : null;
+  const voteUrl = state?.audienceVoteUrl ?? null;
+  const qrImageUrl = voteUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(voteUrl)}`
+    : null;
 
   return (
     <CurtainFrame>
@@ -92,12 +92,14 @@ export default function AudiencePage() {
               <div className="mt-10 flex flex-col items-center gap-6">
                 <StatusPill status={state.status} className="text-base px-5 py-1.5" />
 
-                {countdownDisplay !== null ? (
+                {state.status === "voting_open" ? (
                   <div className="relative">
-                    <span className="countdown-digits font-serif text-[7rem] sm:text-[9rem] leading-none text-antique-gold drop-shadow-[0_0_28px_rgba(198,161,91,0.45)]">
-                      {countdownDisplay}
-                    </span>
-                    <p className="label-caps text-parchment/55 tracking-[0.35em] mt-1">seconds left to vote</p>
+                    <p className="countdown-digits font-serif text-5xl sm:text-6xl leading-none text-antique-gold drop-shadow-[0_0_28px_rgba(198,161,91,0.45)]">
+                      Voting is open
+                    </p>
+                    <p className="label-caps text-parchment/55 tracking-[0.35em] mt-3">
+                      Cast your vote — the crew closes the round
+                    </p>
                   </div>
                 ) : (
                   <p className="font-serif italic text-parchment/70 text-xl sm:text-2xl">{suspenseLine}</p>
@@ -122,10 +124,25 @@ export default function AudiencePage() {
           {!connected && <p className="label-caps text-muted-rose/80 mt-2">Connection lost — reconnecting…</p>}
         </footer>
 
-        {state?.status === "voting_open" && qrImageUrl && (
-          <div className="absolute bottom-24 right-8 z-20 bg-dark-plum/80 border border-antique-gold/35 p-3 shadow-[0_0_28px_rgba(198,161,91,0.18)] backdrop-blur-sm">
-            <img src={qrImageUrl} alt="Audience vote QR code" className="w-28 h-28 bg-white p-2 rounded-sm" />
-            <p className="label-caps text-antique-gold mt-2 text-center tracking-[0.24em] text-[10px]">Scan to vote</p>
+        {state?.status === "voting_open" && voteUrl && (
+          <div className="absolute bottom-24 right-8 z-20 max-w-[240px] bg-dark-plum/80 border border-antique-gold/35 p-4 text-center shadow-[0_0_28px_rgba(198,161,91,0.18)] backdrop-blur-sm">
+            <p className="label-caps text-antique-gold tracking-[0.24em] text-[10px]">Scan or type to vote</p>
+            {qrImageUrl && (
+              <img
+                src={qrImageUrl}
+                alt="Audience vote QR code"
+                className="w-32 h-32 bg-white p-2 rounded-sm mx-auto mt-3"
+              />
+            )}
+            <a
+              href={voteUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="block text-parchment hover:text-antique-gold transition-colors text-xs font-semibold break-all mt-3"
+            >
+              {voteUrl}
+            </a>
+            <p className="text-parchment/45 text-[10px] mt-2">No login needed · one vote per performer</p>
           </div>
         )}
 

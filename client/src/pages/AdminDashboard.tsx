@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { api, extractError } from "../utils/api";
-import { useSocketState, useCountdown } from "../hooks/useRealtime";
+import { api, extractError, setAuthToken } from "../utils/api";
+import { useSocketState, useElapsed } from "../hooks/useRealtime";
 import { StatusPill } from "../components/StatusPill";
 import { Sparkle, HandArrow } from "../components/Decor";
 import type { AdminState, JudgeAccount, Participant } from "../types";
@@ -536,14 +536,16 @@ function JudgesPanel({
 export default function AdminDashboard() {
   const { state, connected } = useSocketState<AdminState>();
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [editing, setEditing] = useState<Participant | null>(null);
   const [confirm, setConfirm] = useState<null | { kind: "reset" | "delete" | "publish" | "unpublish"; participant?: Participant }>(null);
   const [correcting, setCorrecting] = useState<null | { id: number; judgeName: string; score: number | null }>(null);
   const [toast, setToast] = useState("");
   const [busyAction, setBusyAction] = useState(false);
 
-  const deadline = state?.status === "voting_open" ? state.votingDeadlineAt : null;
-  const remaining = useCountdown(deadline);
+  const votingOpenedAt = state?.status === "voting_open" ? state.votingOpenedAt : null;
+  const elapsed = useElapsed(votingOpenedAt);
+  const elapsedLabel = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
 
   const show = (msg: string) => {
     setToast(msg);
@@ -614,11 +616,17 @@ export default function AdminDashboard() {
               </span>
             )}
             <StatusPill status={state.status} />
+            <button
+              onClick={() => setShowLeaderboard(true)}
+              className="btn-outline px-4 py-2 text-xs tracking-wider uppercase"
+            >
+              Leaderboard
+            </button>
             <a href="/audience" target="_blank" rel="noreferrer" className="btn-outline px-4 py-2 text-xs tracking-wider uppercase">
               Audience Screen ↗
             </a>
             <button
-              onClick={() => run(async () => { await api.post("/auth/logout"); window.location.href = "/admin/login"; }, "")}
+              onClick={() => run(async () => { setAuthToken(null); await api.post("/auth/logout"); window.location.href = "/admin/login"; }, "")}
               className="btn-outline px-4 py-2 text-xs tracking-wider uppercase opacity-70"
             >
               Sign out
@@ -630,7 +638,7 @@ export default function AdminDashboard() {
           <div className="mb-4 px-4 py-2.5 gold-frame bg-oxblood/60 text-parchment text-sm">{toast}</div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-[290px_1fr_330px] gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-[290px_1fr] gap-5">
           {/* Left: participant queue */}
           <aside className="gold-frame bg-dark-plum/60 p-4 flex flex-col max-h-[calc(100vh-140px)]">
             <div className="flex items-center justify-between mb-3">
@@ -777,40 +785,42 @@ export default function AdminDashboard() {
               {state.status === "voting_open" ? (
                 <>
                   <span className="countdown-digits font-serif text-8xl sm:text-9xl text-antique-gold leading-none drop-shadow-[0_0_24px_rgba(198,161,91,0.4)]">
-                    {String(Math.max(0, remaining)).padStart(2, "0")}
+                    {elapsedLabel}
                   </span>
                   <p className="label-caps text-[#9fd39f] tracking-[0.4em] mt-2">Voting Open</p>
+                  <p className="text-parchment/45 text-xs mt-2">Stays open until the crew closes it.</p>
                 </>
               ) : (
-                <>
-                  <div className="flex items-center gap-3">
-                    <Sparkle size={10} />
-                    <span className="label-caps text-parchment/45 tracking-[0.3em]">
-                      {state.status === "voting_closed"
-                        ? "Voting Closed"
-                        : state.status === "completed"
-                          ? "Show Completed"
-                          : "Ready to Open Voting"}
-                    </span>
-                    <Sparkle size={10} delay={0.9} />
-                  </div>
-                  <p className="countdown-digits font-serif text-7xl text-parchment/25 leading-none mt-2">
-                    {String(state.votingDurationSec).padStart(2, "0")}
-                  </p>
-                </>
+                <div className="flex items-center gap-3">
+                  <Sparkle size={10} />
+                  <span className="label-caps text-parchment/45 tracking-[0.3em]">
+                    {state.status === "voting_closed"
+                      ? "Voting Closed"
+                      : state.status === "completed"
+                        ? "Show Completed"
+                        : "Ready to Open Voting"}
+                  </span>
+                  <Sparkle size={10} delay={0.9} />
+                </div>
               )}
 
               {state.audienceVoteUrl && (
                 <div className="mt-6 flex flex-col items-center gap-3 rounded-sm border border-antique-gold/35 bg-parchment/[0.03] p-4">
-                  <p className="label-caps text-antique-gold tracking-[0.3em]">Audience QR</p>
+                  <p className="label-caps text-antique-gold tracking-[0.3em]">Audience vote link</p>
                   <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(state.audienceVoteUrl)}`}
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(state.audienceVoteUrl)}`}
                     alt="Audience vote QR code"
-                    className="w-28 h-28 bg-white p-2 rounded-sm"
+                    className="w-32 h-32 bg-white p-2 rounded-sm"
                   />
-                  <a href={state.audienceVoteUrl} target="_blank" rel="noreferrer" className="text-xs text-parchment/70 hover:text-antique-gold transition-colors break-all text-center">
+                  <a
+                    href={state.audienceVoteUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sm text-parchment hover:text-antique-gold transition-colors break-all text-center"
+                  >
                     {state.audienceVoteUrl}
                   </a>
+                  <p className="text-[11px] text-parchment/45 text-center">No login needed · one vote per performer per device</p>
                 </div>
               )}
 
@@ -825,7 +835,7 @@ export default function AdminDashboard() {
                   </button>
                 ) : (
                   <button
-                    onClick={() => run(() => api.post("/event/close-voting", {}), "Voting closed early.")}
+                    onClick={() => run(() => api.post("/event/close-voting", {}), "Voting closed.")}
                     disabled={busyAction}
                     className="btn-oxblood px-10 py-4 font-semibold tracking-[0.16em] uppercase text-base"
                   >
@@ -861,7 +871,7 @@ export default function AdminDashboard() {
             {/* Judge scores for active participant */}
             <div className="mt-9">
               <div className="gold-rule mb-4" />
-              <p className="label-caps text-antique-gold/80 mb-3">Judge Scores — Active Performer</p>
+              <p className="label-caps text-antique-gold/80 mb-3">Scores — Active Performer</p>
               {(() => {
                 const entry = leaderboard.find((l) => l.participant.id === activeId);
                 if (!entry || entry.scores.length === 0) {
@@ -881,12 +891,14 @@ export default function AdminDashboard() {
                           <p className="font-serif text-4xl text-antique-gold countdown-digits mt-1">{s.score}</p>
                         )}
                         {s.isCorrected && <p className="label-caps text-muted-rose/80 mt-1">Corrected</p>}
-                        <button
-                          onClick={() => setCorrecting({ id: s.id, judgeName: s.judgeName, score: s.score })}
-                          className="btn-outline px-3 py-0.5 text-[10px] tracking-wider uppercase mt-2"
-                        >
-                          Correct
-                        </button>
+                        {s.judgeId >= 0 && (
+                          <button
+                            onClick={() => setCorrecting({ id: s.id, judgeName: s.judgeName, score: s.score })}
+                            className="btn-outline px-3 py-0.5 text-[10px] tracking-wider uppercase mt-2"
+                          >
+                            Correct
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -916,11 +928,37 @@ export default function AdminDashboard() {
             </div>
           </section>
 
-          {/* Right: private leaderboard */}
-          <aside className="gold-frame bg-dark-plum/60 p-4 flex flex-col max-h-[calc(100vh-140px)]">
-            <p className="label-caps text-antique-gold mb-1">Leaderboard</p>
-            <p className="text-[11px] text-parchment/40 mb-3">Private · admins only · tie-break: avg → total → fewest missing</p>
-            <div className="thin-scroll overflow-y-auto flex-1 space-y-2 pr-1">
+        </div>
+
+        <JudgesPanel
+          judges={state.judges ?? []}
+          votingOpen={state.status === "voting_open"}
+          show={show}
+        />
+      </div>
+
+      {showLeaderboard && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowLeaderboard(false)}
+        >
+          <div
+            className="gold-frame bg-dark-plum w-full max-w-lg max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3 p-5 pb-3 border-b border-parchment/10">
+              <div>
+                <p className="label-caps text-antique-gold mb-1">Leaderboard</p>
+                <p className="text-[11px] text-parchment/40">Private · 80% judges / 20% audience · tie-break: avg → total → fewest missing</p>
+              </div>
+              <button
+                onClick={() => setShowLeaderboard(false)}
+                className="btn-outline px-3 py-1 text-xs tracking-wider uppercase shrink-0"
+              >
+                Close
+              </button>
+            </div>
+            <div className="thin-scroll overflow-y-auto flex-1 space-y-2 p-4">
               {leaderboard.length === 0 && (
                 <p className="text-parchment/45 text-sm py-6 text-center">Add participants to see rankings.</p>
               )}
@@ -961,15 +999,9 @@ export default function AdminDashboard() {
                 </div>
               ))}
             </div>
-          </aside>
+          </div>
         </div>
-
-        <JudgesPanel
-          judges={state.judges ?? []}
-          votingOpen={state.status === "voting_open"}
-          show={show}
-        />
-      </div>
+      )}
 
       {confirm?.kind === "reset" && (
         <ConfirmDialog

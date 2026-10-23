@@ -42,6 +42,5 @@ export const config = {
     max: parseInt(process.env.SCORING_MAX ?? "10", 10),
     step: parseInt(process.env.SCORING_STEP ?? "1", 10),
   },
-  votingDurationSeconds: parseInt(process.env.VOTING_DURATION_SECONDS ?? "30", 10),
   allowScoreCorrections: process.env.ALLOW_SCORE_CORRECTIONS !== "false",
 };

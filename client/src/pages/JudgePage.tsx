@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, extractError } from "../utils/api";
-import { useSocketState, useCountdown } from "../hooks/useRealtime";
+import { api, extractError, setAuthToken } from "../utils/api";
+import { refreshSocketAuth, useSocketState } from "../hooks/useRealtime";
 import { Sparkle } from "../components/Decor";
 import { StatusPill } from "../components/StatusPill";
 import type { JudgeState, User } from "../types";
@@ -19,15 +19,19 @@ export default function JudgePage() {
   const SCORING_MAX = state?.scoringMax ?? DEFAULT_MAX;
 
   useEffect(() => {
-    api.get("/auth/me").then((res) => setUser(res.data.user)).catch(() => setUser(null));
+    api
+      .get("/auth/me")
+      .then((res) => {
+        if (res.data.authToken) setAuthToken(res.data.authToken);
+        setUser(res.data.user);
+      })
+      .catch(() => setUser(null));
   }, []);
 
   useEffect(() => {
     if (state?.mySubmission?.score != null) setSelected(state.mySubmission.score);
   }, [state?.activeParticipant?.id, state?.mySubmission?.score]);
 
-  const deadline = state?.status === "voting_open" ? state.votingDeadlineAt : null;
-  const remaining = useCountdown(deadline);
   const votingOpen = state?.status === "voting_open";
   const activeId = state?.activeParticipant?.id ?? null;
   const alreadySubmitted = state?.mySubmission?.score != null && !state?.mySubmission?.isMissing;
@@ -47,6 +51,8 @@ export default function JudgePage() {
   };
 
   const logout = async () => {
+    setAuthToken(null);
+    refreshSocketAuth();
     await api.post("/auth/logout");
     setUser(null);
     window.location.reload();
@@ -66,9 +72,12 @@ export default function JudgePage() {
               });
               if (res.data.user?.role !== "judge") {
                 setFeedback({ kind: "err", text: "That account is not a judge account." });
+                setAuthToken(null);
                 await api.post("/auth/logout");
                 return;
               }
+              setAuthToken(res.data.authToken);
+              refreshSocketAuth();
               setUser(res.data.user);
             } catch (err) {
               setFeedback({ kind: "err", text: extractError(err) });
@@ -128,8 +137,8 @@ export default function JudgePage() {
               <div className="flex items-center justify-center gap-3">
                 <StatusPill status={state.status} />
                 {votingOpen && (
-                  <span className="countdown-digits font-serif text-3xl text-antique-gold">
-                    {String(Math.max(0, remaining)).padStart(2, "0")}s
+                  <span className="label-caps text-[#9fd39f] tracking-[0.25em]">
+                    Vote now
                   </span>
                 )}
               </div>
@@ -226,7 +235,7 @@ export default function JudgePage() {
                   {!votingOpen && (
                     <p className="text-parchment/50 text-sm mt-4">
                       {state.mySubmission?.isMissing
-                        ? "Your score was not submitted in time and has been marked missing."
+                        ? "Your score was not submitted before voting closed and has been marked missing."
                         : "Wait for the admin to open voting for this performer."}
                     </p>
                   )}

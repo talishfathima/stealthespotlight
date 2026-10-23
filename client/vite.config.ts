@@ -3,8 +3,11 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 export default defineConfig(({ mode }) => {
+  // The API server loads the repo-root .env, so the dev proxy must read it too.
+  // (process.cwd() is client/ when started via the npm workspace.)
+  const rootEnv = loadEnv(mode, path.resolve(__dirname, '..'), '')
   const env = loadEnv(mode, process.cwd(), '')
-  const backendPort = Number(env.PORT ?? '3002')
+  const backendPort = Number(rootEnv.PORT ?? env.PORT ?? '3001')
 
   return {
     plugins: [react()],
@@ -14,6 +17,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      host: true,
       port: 5173,
       proxy: {
         '/api': {

@@ -40,6 +40,9 @@ export default function HomePage() {
             <Link to="/judge" className="btn-outline px-6 py-2.5 text-sm tracking-[0.12em] uppercase">
               Judge's Booth
             </Link>
+            <Link to="/vote" className="btn-outline px-6 py-2.5 text-sm tracking-[0.12em] uppercase">
+              Cast a Vote
+            </Link>
             <Link to="/results" className="btn-outline px-6 py-2.5 text-sm tracking-[0.12em] uppercase">
               Final Results
             </Link>
@@ -55,7 +58,7 @@ export default function HomePage() {
           <p className="label-caps text-charcoal-ink/60">Tonight's Programme</p>
           <p className="font-serif text-2xl text-charcoal-ink mt-1">Steal the Spotlight</p>
           <p className="text-sm text-charcoal-ink/70 mt-2">
-            Live scoring · 10-second voting windows · Results revealed on the house screen.
+            Live scoring · Audience votes count 20% · Results revealed on the house screen.
           </p>
         </TicketStub>
       </div>

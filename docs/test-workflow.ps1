@@ -64,7 +64,7 @@ Write-Host "=== 1. Auth ==="
 $r = Call POST "/auth/login" @{ username = "admin"; password = "admin-spotlight-2026" } $adminSession
 Check "Admin login" ($r.S -eq 200 -and $r.D.user.role -eq "admin") "status=$($r.S) role=$($r.D.user.role)"
 
-$r = Call POST "/auth/login" @{ username = "judge"; password = "judge-spotlight-2026" } $judgeSession
+$r = Call POST "/auth/login" @{ username = "judge01"; password = "judge-spotlight-2026" } $judgeSession
 Check "Judge login" ($r.S -eq 200 -and $r.D.user.role -eq "judge") "status=$($r.S) role=$($r.D.user.role)"
 
 $r = Call POST "/auth/login" @{ username = "admin"; password = "wrong" } $publicSession
@@ -109,10 +109,9 @@ Check "Select participant 1" ($r.S -eq 200) "status=$($r.S)"
 $r = Call GET "/state" $null $publicSession
 Check "Audience sees active participant" ($r.D.activeParticipant.id -eq $p1.id) "name=$($r.D.activeParticipant.name)"
 
-$r = Call POST "/event/open-voting" @{ durationSec = 10 } $adminSession
+$r = Call POST "/event/open-voting" @{} $adminSession
 Check "Open voting" ($r.S -eq 200 -and $r.D.status -eq "voting_open") "status=$($r.D.status)"
-$deadline = $r.D.voting_deadline_at
-Check "Deadline set in the future" ((Get-Date $deadline) -gt (Get-Date).ToUniversalTime()) "deadline=$deadline"
+Check "No auto-close deadline" ($null -eq $r.D.voting_deadline_at) "deadline=$($r.D.voting_deadline_at)"
 
 $r = Call POST "/event/open-voting" @{} $adminSession
 Check "Double-open rejected" ($r.S -eq 409) "status=$($r.S)"
@@ -130,9 +129,19 @@ Check "Duplicate submission rejected" ($r.S -eq 409) "status=$($r.S) err=$($r.D.
 $r = Call GET "/state/judge" $null $judgeSession
 Check "Judge sees own locked submission" ($r.D.mySubmission.score -eq 8) "score=$($r.D.mySubmission.score)"
 
+Write-Host "`n=== 5b. Anonymous audience voting ==="
+$r = Call POST "/audience/vote" @{ voterId = "device-alpha-1111"; score = 4 } $publicSession
+Check "Audience vote accepted without login" ($r.S -eq 200) "status=$($r.S) err=$($r.D.error)"
+$r = Call POST "/audience/vote" @{ voterId = "device-alpha-1111"; score = 9 } $publicSession
+Check "Same device cannot vote twice in a round" ($r.S -eq 409) "status=$($r.S)"
+$r = Call POST "/audience/vote" @{ voterId = "device-bravo-2222"; score = 10 } $publicSession
+Check "Second audience device can vote" ($r.S -eq 200) "status=$($r.S) err=$($r.D.error)"
+
 $r = Call GET "/state/admin" $null $adminSession
 $lb = $r.D.leaderboard | Where-Object { $_.participant.id -eq $p1.id }
-Check "Admin leaderboard has average 8" ($lb.average -eq 8) "avg=$($lb.average) rank=$($lb.rank)"
+Check "Admin leaderboard uses 80/20 weighting" ($lb.average -eq 7.8) "avg=$($lb.average) rank=$($lb.rank)"
+$aud = $lb.scores | Where-Object { $_.judgeId -eq -1 }
+Check "Audience votes appear as one averaged row" ($null -ne $aud -and $aud.score -eq 7) "audience=$($aud.score) name=$($aud.judgeName)"
 
 $r = Call GET "/state" $null $publicSession
 Check "Audience still cannot see score" (-not ($r.D | Get-Member -MemberType NoteProperty | Where-Object Name -match "score|leaderboard|average")) "public props clean"
@@ -145,19 +154,26 @@ Check "Score after close rejected" ($r.S -eq 403) "status=$($r.S) err=$($r.D.err
 Write-Host "`n=== 7. Missing-score marking ==="
 $r = Call GET "/state/admin" $null $adminSession
 $lb = $r.D.leaderboard | Where-Object { $_.participant.id -eq $p1.id }
-Check "No missing flags when judge scored" ($lb.missingJudgeNames.Count -eq 0) "missing=$($lb.missingJudgeNames -join ',')"
+Check "Scoring judge is not marked missing" (-not ($lb.missingJudgeNames -contains "Judge 01")) "missing=$($lb.missingJudgeNames -join ',')"
 
 $p2 = $r.D.participants | Where-Object { $_.number -eq 2 } | Select-Object -First 1
 Call POST "/event/select-participant" @{ participantId = $p2.id } $adminSession | Out-Null
-Call POST "/event/open-voting" @{ durationSec = 2 } $adminSession | Out-Null
-Write-Host "  waiting 3s for server auto-close..."
+Call POST "/event/open-voting" @{} $adminSession | Out-Null
+Write-Host "  waiting 3s to confirm voting stays open..."
 Start-Sleep -Seconds 3
 $r = Call GET "/state" $null $publicSession
-Check "Voting auto-closed after deadline" ($r.D.status -eq "voting_closed") "status=$($r.D.status)"
+Check "Voting stays open until crew closes it" ($r.D.status -eq "voting_open") "status=$($r.D.status)"
+
+$r = Call POST "/audience/vote" @{ voterId = "device-alpha-1111"; score = 6 } $publicSession
+Check "Same device can vote again in a new round" ($r.S -eq 200) "status=$($r.S) err=$($r.D.error)"
+$r = Call POST "/audience/vote" @{ voterId = "device-alpha-1111"; score = 8 } $publicSession
+Check "Duplicate vote rejected in new round" ($r.S -eq 409) "status=$($r.S)"
+
+Call POST "/event/close-voting" @{} $adminSession | Out-Null
 
 $r = Call GET "/state/admin" $null $adminSession
 $lb2 = $r.D.leaderboard | Where-Object { $_.participant.id -eq $p2.id }
-Check "Unscored participant marked missing" ($lb2.missingJudgeNames.Count -eq 1) "missing=$($lb2.missingJudgeNames -join ',') avg=$($lb2.average)"
+Check "Unscored participant marked missing" ($lb2.missingJudgeNames.Count -gt 0) "missing=$($lb2.missingJudgeNames.Count) avg=$($lb2.average)"
 
 Write-Host "`n=== 8. Score correction (admin only) ==="
 $sid = $lb.scores[0].id
@@ -245,8 +261,9 @@ Check "Judge 2 scores the same performer" ($r.S -eq 201) "status=$($r.S)"
 $r = Call GET "/state/admin" $null $adminSession
 $entry = $r.D.leaderboard | Where-Object { $_.participant.id -eq $p.id }
 Check "Two scores averaged together" ($entry.average -eq 7.5) "avg=$($entry.average) scores=$($entry.scores.Count)"
-Check "Both judges appear on the scorecard" ($entry.scores.Count -eq 2) "scores=$($entry.scores.Count)"
-Check "No missing judges when everyone scored" ($entry.missingJudgeNames.Count -eq 0) "missing=$($entry.missingJudgeNames -join ',')"
+$scored = @($entry.scores | Where-Object { -not $_.isMissing -and $null -ne $_.score })
+Check "Both judges appear on the scorecard" ($scored.Count -eq 2) "scores=$($scored.Count)"
+Check "Scoring judges are not marked missing" ((-not ($entry.missingJudgeNames -contains "Judge 01")) -and (-not ($entry.missingJudgeNames -contains "Second Judge"))) "missing=$($entry.missingJudgeNames -join ',')"
 
 $r = Call DELETE "/judges/$($judge2.id)" $null $adminSession
 Check "Judge with scores cannot be removed" ($r.S -eq 409) "status=$($r.S)"

@@ -115,7 +115,7 @@ export default function ResultsPage() {
               <p className="font-serif text-5xl sm:text-6xl text-parchment countdown-digits mt-5">
                 {champion.average !== null ? champion.average.toFixed(2) : "—"}
               </p>
-              <p className="label-caps text-parchment/45 tracking-[0.35em] mt-1">average score</p>
+              <p className="label-caps text-parchment/45 tracking-[0.35em] mt-1">score · 80% judges / 20% audience</p>
             </div>
           </section>
         )}
