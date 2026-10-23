@@ -18,7 +18,8 @@
     "express-session": "^1.17.3",
     "pg": "^8.11.3",
     "pg-mem": "^3.0.14",
-    "socket.io": "^4.7.4"
+    "socket.io": "^4.7.4",
+    "tsx": "^4.7.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -27,7 +28,6 @@
     "@types/express-session": "^1.17.10",
     "@types/node": "^20.11.10",
     "@types/pg": "^8.11.0",
-    "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }
 }
