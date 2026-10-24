@@ -8,7 +8,6 @@ export default defineConfig(({ mode }) => {
   const rootEnv = loadEnv(mode, path.resolve(__dirname, '..'), '')
   const env = loadEnv(mode, process.cwd(), '')
   const backendPort = Number(rootEnv.PORT ?? env.PORT ?? '3001')
-
   return {
     plugins: [react()],
     resolve: {
@@ -21,11 +20,11 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         '/api': {
-          target: `http://localhost:${backendPort}`,
+          target: `https://stealthespotlight-sloa.onrender.com:${backendPort}`,
           changeOrigin: true,
         },
         '/socket.io': {
-          target: `http://localhost:${backendPort}`,
+          target: `https://stealthespotlight-sloa.onrender.com:${backendPort}`,
           ws: true,
         },
       },
