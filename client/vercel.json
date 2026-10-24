@@ -4,6 +4,10 @@
     {
       "source": "/(.*)",
       "destination": "/index.html"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://stealthespotlight-sloa.onrender.com/api/:path*"
     }
   ]
 }
